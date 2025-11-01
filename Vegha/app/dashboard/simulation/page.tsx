@@ -12,8 +12,11 @@ import {
   MapPin,
 } from 'lucide-react';
 
-// --- DEFINE THE URL ONCE HERE ---
-const sumoServerUrl = process.env.NEXT_PUBLIC_SOCKET_IO_URL || 'http://localhost:5000';
+
+
+// ✅ FIX: Use HTTPS for production (wss:// will be automatic)
+const sumoServerUrl = process.env.NEXT_PUBLIC_SUMO_SERVER_URL || 'https://own.vikasrajyadav.com';
+
 
 interface SimulationMetrics {
   vehicleCount: number;
@@ -46,6 +49,7 @@ export default function SimulationPage() {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 1000,
+      secure:true,
       reconnectionAttempts: 5
     });
 
@@ -157,7 +161,7 @@ export default function SimulationPage() {
 
         {/* Metrics Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 mb-6">
-          {/* Cards remain the same */}
+          
           <Card
             title="Simulation Step"
             value={metrics.simTime}
@@ -214,7 +218,7 @@ export default function SimulationPage() {
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-blue-300">Endpoint:</span>
                   <code className="bg-blue-900/50 px-3 py-1 rounded text-blue-200 text-sm font-mono">
-                    {sumoServerUrl} {/* <-- ✨ USE THE DYNAMIC URL */}
+                    {sumoServerUrl} 
                   </code>
                 </div>
                 <div className="flex items-center gap-2">
