@@ -7,16 +7,24 @@ import traci
 import warnings
 from collections import defaultdict
 
+# In sumo_simulator.py
+
 class SumoSimulator:
-    def __init__(self, config_file, step_length=1.0, gui=False, queue_dist=150):
+    def __init__(self, config_file, config, step_length=1.0, gui=False, queue_dist=150): # Add config
         self.config_file = config_file
         self.step_length = step_length
         self.gui = gui
         self.queue_detection_distance = queue_dist
+        
+        # Store priority weights from the config
+        self.priority_weights = config['priority_weights']
+        
         self._start_simulation()
         
         self.junctions = self._get_junctions_and_phase_maps()
-        self.last_waiting_times = {j_id: 0.0 for j_id in self.junctions}
+        
+        # We will now track WEIGHTED waiting time for the reward
+        self.last_weighted_waiting_times = {j_id: 0.0 for j_id in self.junctions}
 
         self.phase_timers = {}
         self.current_actions = {}
@@ -93,32 +101,60 @@ class SumoSimulator:
     def get_state(self, junction_id):
         state = []
         junction_info = self.junctions[junction_id]
+        
         for road_id in junction_info['incoming_roads']:
             lane_count = traci.edge.getLaneNumber(road_id)
             lanes = [f"{road_id}_{i}" for i in range(lane_count)]
-            queue_length = 0
-            max_wait_time = 0.0
+            
+            weighted_queue_length = 0.0
+            weighted_max_wait_time = 0.0 # We will now use the individual vehicle's wait time
+
             for lane_id in lanes:
                 vehicles = traci.lane.getLastStepVehicleIDs(lane_id)
-                lane_queue = sum(1 for v_id in vehicles if traci.vehicle.getSpeed(v_id) < 0.1)
-                queue_length += lane_queue
-                wait_time_on_lane = traci.lane.getWaitingTime(lane_id)
-                if wait_time_on_lane > max_wait_time:
-                    max_wait_time = wait_time_on_lane
-            state.extend([queue_length, max_wait_time])
+                
+                # Calculate weighted queue
+                for v_id in vehicles:
+                    if traci.vehicle.getSpeed(v_id) < 0.1:
+                        v_type = traci.vehicle.getTypeID(v_id)
+                        # Use a default weight of 1.0 if type is not in config
+                        weight = self.priority_weights.get(v_type, 1.0)
+                        weighted_queue_length += weight
+                
+                # Find the highest weighted waiting time on this road
+                # This is more accurate than weighting the lane's total time
+                for v_id in vehicles:
+                    v_type = traci.vehicle.getTypeID(v_id)
+                    weight = self.priority_weights.get(v_type, 1.0)
+                    vehicle_wait_time = traci.vehicle.getWaitingTime(v_id)
+                    
+                    # We want the wait time of the highest priority vehicle
+                    if vehicle_wait_time * weight > weighted_max_wait_time:
+                         weighted_max_wait_time = vehicle_wait_time * weight
+            
+            state.extend([weighted_queue_length, weighted_max_wait_time])
+            
         return np.array(state, dtype=np.float32)
 
     def get_reward(self, junction_id):
-        total_waiting_time = 0.0
+        REWARD_SCALING_FACTOR = 100.0 
+
+        total_weighted_waiting_time = 0.0
         junction_info = self.junctions[junction_id]
+        
         for road_id in junction_info['incoming_roads']:
             lane_count = traci.edge.getLaneNumber(road_id)
             lanes = [f"{road_id}_{i}" for i in range(lane_count)]
             for lane_id in lanes:
-                total_waiting_time += traci.lane.getWaitingTime(lane_id)
-        reward = self.last_waiting_times[junction_id] - total_waiting_time
-        self.last_waiting_times[junction_id] = total_waiting_time
-        return reward
+                vehicles = traci.lane.getLastStepVehicleIDs(lane_id)
+                for v_id in vehicles:
+                    v_type = traci.vehicle.getTypeID(v_id)
+                    weight = self.priority_weights.get(v_type, 1.0)
+                    total_weighted_waiting_time += traci.vehicle.getWaitingTime(v_id) * weight
+
+        reward = self.last_weighted_waiting_times[junction_id] - total_weighted_waiting_time
+        self.last_weighted_waiting_times[junction_id] = total_weighted_waiting_time
+        
+        return reward / REWARD_SCALING_FACTOR
 
     def simulation_step(self):
         traci.simulationStep()

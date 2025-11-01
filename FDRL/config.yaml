@@ -3,39 +3,45 @@
 # ----------------------------------
 sumo:
   config_file: sumo_files/Berlin/osm.sumocfg
-  step_length: 1.0          # Duration of a single simulation step in seconds
-  gui: false                # Run with SUMO GUI during training (set to true in infer.py)
-  queue_detection_distance: 150 # Distance from junction to count a vehicle as 'queued'
-  gridlock_detection_time: 300.0 
-  
+  step_length: 1.0
+  gui: false
+  gridlock_detection_time: 300.0
+
+# ----------------------------------
+# Vehicle Priority Weights
+# ----------------------------------
+priority_weights:
+  truck: 10.0      # Highest priority (acting as ambulance)
+  bus: 5.0         # High priority (public transport)
+  car: 1.0         # Standard priority
+  motorcycle: 1.0  # Standard priority
+
 # ----------------------------------
 # Federated Deep RL Configuration
 # ----------------------------------
 fdrl:
-  epochs: 500               # Total number of global training rounds
-  K: 10                     # Number of local training steps between federated aggregations
-  alpha: 0.1                # FL rate for soft updates (0.0 for pure averaging, closer to 1.0 for slower global model change)
-  gamma: 0.99               # Discount factor for future rewards
-  actor_lr: 0.0001          # Learning rate for the Actor network
-  critic_lr: 0.001          # Learning rate for the Critic network
-  clip_epsilon: 0.2         # PPO clip parameter (ε)
-  yellow_time: 3            # Duration of the yellow phase in seconds
-  green_time: 30            # Duration of a green phase (ΔT) in seconds
-  aggregation_weights_mode: equal   # "equal" or "performance" (future extension)
+  epochs: 500
+  K: 10
+  alpha: 0.1
+  gamma: 0.99
+  actor_lr: 0.0001
+  critic_lr: 0.001
+  clip_epsilon: 0.2
+  yellow_time: 3
+  green_time: 30
 
 # ----------------------------------
 # Model & System Configuration
 # ----------------------------------
 model:
-  # Network layers: Input -> Hidden1 -> Hidden2 -> Output
-  # Input size is 2*N (N=num_roads), Output is N for Actor, 1 for Critic
-  # The code will dynamically adjust input/output layers based on junction.
   hidden_layers: [64, 16]
   activation: relu
 
 system:
-  mode: train               # "train" or "infer"
-  # List of junction IDs to control. If empty, all junctions are controlled.
+  server_host: localhost
+  server_port: 12345
+
+  # This list will be auto-populated by discover_junctions.py
   controlled_junctions:
   - GS_21441737
   - GS_25954547
@@ -43,18 +49,11 @@ system:
   - GS_26753059
   - GS_659394041
   - cluster_262476527_26871569_311718989_3836987635_#3more
-  server_host: 127.0.0.1
-  server_port: 5000
-  # Path to save trained models
-  model_save_path: ./saved_models/global_model.pth
-  # Path for logs
+  # Save model in a dedicated directory to prevent errors
+  model_save_path: saved_models/model.pth
   log_file: training_logs.json
 
-# ----------------------------------
-# REST API for Inference Logging
-# ----------------------------------
-api:
-  enabled: true
-  host: 127.0.0.1
-  port: 8000
-  endpoint: /logs
+  # Early stopping configuration
+  enable_patience: true
+  patience_epochs: 50
+  min_reward_delta: 0.1

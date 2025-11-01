@@ -41,20 +41,29 @@ class FederatedClient:
         
         sim = SumoSimulator(
             self.config['sumo']['config_file'],
+            self.config, # We added this in a previous step
             step_length=self.config['sumo']['step_length'],
             gui=False
         )
 
         for epoch in range(self.config['fdrl']['epochs']):
-            # Receive global model
-            data_size = int.from_bytes(self.socket.recv(8), 'big')
+            # Wait for the size of the next data packet
+            data_size_bytes = self.socket.recv(8)
+
+            # If we receive an empty byte string, the server has closed the connection.
+            # This is our signal to shut down gracefully.
+            if not data_size_bytes:
+                print(f"Client {self.junction_id} detected server shutdown. Exiting.")
+                break # Exit the training loop cleanly
+            
+            data_size = int.from_bytes(data_size_bytes, 'big')
+            
             received_data = b""
             while len(received_data) < data_size:
                 received_data += self.socket.recv(4096)
             
             global_weights = pickle.loads(received_data)
             
-            # Move weights to device
             global_weights = {k: v.to(self.fabric.device) for k, v in global_weights.items()}
             
             self.agent.actor.load_state_dict(global_weights)
@@ -84,7 +93,6 @@ class FederatedClient:
             loss, actor_loss, critic_loss = self.agent.update(self.memory)
             self.memory.clear_memory()
 
-            # Send local model (move to CPU for pickle)
             log_data = {
                 'cumulative_reward': cumulative_reward,
                 'actor_loss': actor_loss,

@@ -1,5 +1,3 @@
-# discover_junctions.py (CORRECTED)
-
 import yaml
 from ruamel.yaml import YAML
 from sumo_simulator import SumoSimulator
@@ -18,8 +16,7 @@ def discover_and_update_config(config_path='config.yaml'):
             py_config = yaml.safe_load(f)
         sumo_config_file_path = py_config['sumo']['config_file']
 
-        # Step 2: Pass the CORRECT (.sumocfg) path to the simulator
-        temp_sim = SumoSimulator(sumo_config_file_path, gui=False)
+        temp_sim = SumoSimulator(sumo_config_file_path, py_config, gui=False)
         all_junctions_info = temp_sim.junctions
         temp_sim.close()
 
@@ -32,7 +29,6 @@ def discover_and_update_config(config_path='config.yaml'):
         print(f"   Original error: {e}")
         sys.exit(1)
 
-    # --- INTELLIGENT FILTERING LOGIC ---
     TARGET_NUM_ROADS = 4 
     
     all_discovered_ids = list(all_junctions_info.keys())
@@ -43,6 +39,7 @@ def discover_and_update_config(config_path='config.yaml'):
 
     for j_id, j_info in all_junctions_info.items():
         if len(j_info['incoming_roads']) == TARGET_NUM_ROADS:
+            # Ensure the phase map is complete for a 4-way intersection
             if len(j_info['action_to_phase']) == TARGET_NUM_ROADS:
                 eligible_junctions.append(j_info)
 
