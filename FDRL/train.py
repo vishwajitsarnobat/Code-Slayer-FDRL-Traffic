@@ -9,99 +9,101 @@ from federated_client import FederatedClient
 from sumo_simulator import SumoSimulator
 import os
 
-def run_server(config):
-    server = FederatedServer(config)
+def run_server(config, ready_event):
+    server = FederatedServer(config, ready_event)
     server.start()
 
 def run_client(junction_info, config):
-    time.sleep(2)
+    time.sleep(3)  # Initial delay
     client = FederatedClient(junction_info, config)
     client.run()
 
 def save_training_plot(log_file, output_path):
-    """
-    Reads the final training log and generates a high-quality, publication-ready plot.
-    """
-    print("Generating final training performance plot...")
+    print("\nGenerating training plot...")
     try:
         with open(log_file, 'r') as f:
             logs = json.load(f)
+        
         if not logs:
-            print("Log file is empty. Cannot generate plot.")
+            print("  ✗ No training data")
             return
-
+        
         df = pd.DataFrame(logs)
         epochs = df['epoch']
         
-        # --- PLOTTING STYLE FOR RESEARCH PAPERS ---
         plt.style.use('seaborn-v0_8-whitegrid')
         plt.rcParams['font.family'] = 'serif'
-        plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
         
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
         
-        # --- Plot 1: Cumulative Reward ---
         reward_ma = df['cumulative_reward'].rolling(window=10, min_periods=1).mean()
-        ax1.plot(epochs, df['cumulative_reward'], color='lightblue', alpha=0.8, label='Epoch Reward')
-        ax1.plot(epochs, reward_ma, color='darkred', linewidth=2, label='10-Epoch Moving Average')
-        ax1.set_ylabel("Average Cumulative Reward", fontsize=14)
-        ax1.set_title("FDRL Training Performance", fontsize=16, weight='bold')
-        ax1.legend(fontsize=12)
-        ax1.tick_params(axis='both', which='major', labelsize=12)
+        ax1.plot(epochs, df['cumulative_reward'], color='lightblue', alpha=0.5, label='Raw')
+        ax1.plot(epochs, reward_ma, color='darkblue', linewidth=2, label='Moving Avg')
+        ax1.set_ylabel("Cumulative Reward", fontsize=12)
+        ax1.set_title("Federated RL Training Performance", fontsize=14, weight='bold')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
         
-        # --- Plot 2: Actor and Critic Loss ---
-        ax2.plot(epochs, df['actor_loss'], color='tab:orange', linewidth=2, label='Actor Loss')
-        ax2.plot(epochs, df['critic_loss'], color='tab:green', linewidth=2, label='Critic Loss')
-        ax2.set_ylabel("Loss", fontsize=14)
-        ax2.set_xlabel("Epoch", fontsize=14)
-        ax2.legend(fontsize=12)
-        ax2.tick_params(axis='both', which='major', labelsize=12)
+        ax2.plot(epochs, df['actor_loss'], color='orange', linewidth=1.5, label='Actor Loss')
+        ax2.plot(epochs, df['critic_loss'], color='green', linewidth=1.5, label='Critic Loss')
+        ax2.set_ylabel("Loss", fontsize=12)
+        ax2.set_xlabel("Epoch", fontsize=12)
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(output_path, dpi=300)
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"✅ Training plot saved to {output_path}")
-
+        print(f"  ✓ Plot saved: {output_path}")
     except Exception as e:
-        print(f"Could not generate training plot. Error: {e}")
-
+        print(f"  ✗ Plot generation failed: {e}")
 
 if __name__ == '__main__':
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
-
-    # ... (code for getting junction details is the same) ...
-    print("Getting junction details from SUMO network...")
+    
+    print("Discovering junctions...")
     temp_sim = SumoSimulator(config['sumo']['config_file'], config, gui=False)
     controlled_junction_ids = config['system']['controlled_junctions']
     controlled_junctions_info = [temp_sim.junctions[j_id] for j_id in controlled_junction_ids]
     temp_sim.close()
-    print(f"Found details for {len(controlled_junctions_info)} junctions to be controlled.")
-
-    # --- Create and start processes (NO PLOT PROCESS) ---
-    server_process = multiprocessing.Process(target=run_server, args=(config,))
+    
+    print(f"Training with {len(controlled_junctions_info)} junctions\n")
+    
+    server_ready = multiprocessing.Event()
+    
+    server_process = multiprocessing.Process(target=run_server, args=(config, server_ready))
     client_processes = [
         multiprocessing.Process(target=run_client, args=(j_info, config))
         for j_info in controlled_junctions_info
     ]
     
     server_process.start()
-    for p in client_processes: p.start()
-
+    print("Waiting for server...")
+    server_ready.wait(timeout=30)
+    print("Server ready! Starting clients...\n")
+    
+    for p in client_processes:
+        p.start()
+        time.sleep(0.5)  # Stagger client starts
+    
     try:
         server_process.join()
-        for p in client_processes: p.join()
-    except KeyboardInterrupt:
-        print("\nInterrupted by user. Terminating processes...")
-    finally:
-        if server_process.is_alive(): server_process.terminate()
         for p in client_processes:
-            if p.is_alive(): p.terminate()
-        
-        # Call final plot saving function at the end ---
-        output_dir = "training_results"
-        os.makedirs(output_dir, exist_ok=True)
-        plot_path = os.path.join(output_dir, "training_performance_plot.png")
-        save_training_plot(config['system']['log_file'], plot_path)
-        
-    print("Training finished.")
+            p.join()
+    except KeyboardInterrupt:
+        print("\n\nInterrupted! Cleaning up...")
+    finally:
+        if server_process.is_alive():
+            server_process.terminate()
+        for p in client_processes:
+            if p.is_alive():
+                p.terminate()
+    
+    # Generate plot
+    output_dir = "training_results"
+    os.makedirs(output_dir, exist_ok=True)
+    plot_path = os.path.join(output_dir, "training_performance_plot.png")
+    save_training_plot(config['system']['log_file'], plot_path)
+    
+    print("\n✓ Training complete!")

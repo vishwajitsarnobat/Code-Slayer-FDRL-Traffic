@@ -1,3 +1,6 @@
+"""
+Inference Script for 3-Way Comparison
+"""
 import yaml
 import torch
 import numpy as np
@@ -6,183 +9,213 @@ import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
-import multiprocessing
 import csv
+import time
 from sumo_simulator import SumoSimulator
 from ppo_agent import Actor
 
-def save_wait_time_breakdown_plot(log_file, junction_ids, mode, config, output_dir):
-    """
-    Reads the final CSV log and generates a publication-ready bar chart
-    showing the average waiting time per vehicle category for each junction.
-    """
-    print(f"Generating wait time breakdown plots for mode '{mode}'...")
-    try:
-        df = pd.read_csv(log_file)
-        if df.empty:
-            print("Log file is empty. Cannot generate plots.")
-            return
-
-        # --- PLOTTING STYLE FOR RESEARCH PAPERS ---
-        plt.style.use('seaborn-v0_8-whitegrid')
-        plt.rcParams['font.family'] = 'serif'
-        plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
-        
-        vehicle_types = list(config['priority_weights'].keys())
-        colors = plt.cm.viridis(np.linspace(0, 1, len(vehicle_types)))
-        color_map = {v_type: color for v_type, color in zip(vehicle_types, colors)}
-
-        # Determine grid size for subplots
-        num_junctions = len(junction_ids)
-        cols = 2 if num_junctions > 1 else 1
-        rows = (num_junctions + 1) // cols
-        
-        fig, axes = plt.subplots(rows, cols, figsize=(10 * cols, 6 * rows), squeeze=False)
-        fig.suptitle(f"Average Waiting Time per Vehicle Type (Mode: {mode.upper()})", fontsize=20, weight='bold')
-        
-        axes_flat = axes.flatten()
-
-        for i, j_id in enumerate(junction_ids):
-            ax = axes_flat[i]
-            
-            # Calculate mean waiting time for each vehicle type for this junction
-            avg_wait_times = {}
-            for v_type in vehicle_types:
-                col_name = f'{j_id}_{v_type}_wait_time'
-                if col_name in df.columns:
-                    avg_wait_times[v_type] = df[col_name].mean()
-            
-            if not avg_wait_times: continue
-
-            # Plotting
-            names = list(avg_wait_times.keys())
-            values = list(avg_wait_times.values())
-            bar_colors = [color_map.get(name, 'gray') for name in names]
-
-            ax.bar(names, values, color=bar_colors)
-            ax.set_title(f"Junction '{j_id}'", fontsize=16)
-            ax.set_ylabel("Average Waiting Time (s)", fontsize=14)
-            ax.tick_params(axis='x', rotation=45, labelsize=12)
-            ax.tick_params(axis='y', labelsize=12)
-
-        # Hide any unused subplots
-        for i in range(num_junctions, len(axes_flat)):
-            axes_flat[i].set_visible(False)
-
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-        plot_filename = os.path.join(output_dir, f"inference_wait_time_breakdown_{mode}.png")
-        plt.savefig(plot_filename, dpi=300)
-        plt.close()
-        print(f"✅ Wait time breakdown plot saved to {plot_filename}")
-
-    except Exception as e:
-        print(f"Could not generate final plots. Error: {e}")
-
-
 def run_inference(config, mode, log_file):
-    """
-    Runs the SUMO simulation for inference and logs per-category waiting times.
-    """
-    config['sumo']['gui'] = True  # Always use GUI for inference visualization
-    sim = SumoSimulator(config['sumo']['config_file'], config, step_length=config['sumo']['step_length'], gui=True)
+    print(f"\n{'='*70}")
+    print(f"MODE: {mode.upper()}")
+    print(f"{'='*70}\n")
     
-    controlled_junction_ids = config['system']['controlled_junctions']
+    # Start simulation with GUI to see what's happening
+    sim = SumoSimulator(config['sumo']['config_file'], config, gui=False)
+    controlled_junctions = config['system']['controlled_junctions']
     vehicle_types = list(config['priority_weights'].keys())
     
-    print(f"Starting inference in '{mode}' mode for junctions: {controlled_junction_ids}")
-
+    # Check vehicles - give time for loading
+    print("Checking traffic (waiting for vehicles to load)...")
+    for step in range(100):  # Wait up to 100 steps
+        traci.simulationStep()
+        loaded = traci.simulation.getLoadedNumber()
+        departed = traci.simulation.getDepartedNumber()
+        if loaded > 0 or departed > 0:
+            break
+    
+    print(f"  Loaded: {loaded} vehicles")
+    print(f"  Departed: {departed} vehicles")
+    print(f"  Waiting: {traci.simulation.getStartingTeleportNumber()} to depart")
+    
+    if loaded == 0 and departed == 0:
+        print("\n⚠️  ERROR: No vehicles in simulation!")
+        print("   Check that route files contain vehicles with valid depart times")
+        print("   Route files:")
+        for vtype in vehicle_types:
+            route_file = f"{config['sumo']['config_file'].replace('osm.sumocfg', '')}osm.{vtype if vtype != 'car' else 'passenger'}.trips.xml"
+            if os.path.exists(route_file):
+                count = os.popen(f"grep -c '<trip ' {route_file}").read().strip()
+                print(f"     - {route_file}: {count} trips")
+        sim.close()
+        return
+    
+    # Load model if RL mode
     agents = {}
-    if mode == 'rl':
-        for j_id in controlled_junction_ids:
-            j_info = sim.junctions[j_id]
-            actor = Actor(2 * len(j_info['incoming_roads']), len(j_info['incoming_roads']), config['model']['hidden_layers'])
+    if mode in ['rl', 'rl_priority']:
+        if not os.path.exists('saved_models/universal_model.pth'):
+            print("✗ Model not found. Run training first.")
+            sim.close()
+            return
+        
+        max_roads = config['system']['max_roads']
+        state_dim = 2 * max_roads
+        action_dim = max_roads
+        
+        # Get hidden layers from config
+        hidden_layers = config['model']['hidden_layers']
+        activation = config['model']['activation']
+        
+        print(f"\nLoading model for {len(controlled_junctions)} junctions...")
+        for jid in controlled_junctions:
+            # Create actor with correct config
+            agents[jid] = Actor(state_dim, action_dim, config)
+            agents[jid].load_state_dict(torch.load('saved_models/universal_model.pth', 
+                                                   map_location='cpu'))
+            agents[jid].eval()
+            
+            # Switch to RL program
             try:
-                actor.load_state_dict(torch.load(config['system']['model_save_path']))
-                actor.eval()
-                agents[j_id] = actor
-            except FileNotFoundError:
-                print(f"FATAL: Model not found at {config['system']['model_save_path']}."); sim.close(); return
-        sim.init_phase_timers(controlled_junction_ids)
-
-    with open(log_file, 'w', newline='') as f:
-        writer = csv.writer(f)
+                traci.trafficlight.setProgram(jid, 'rl_program')
+                print(f"  ✓ {jid[:30]} -> RL control")
+            except Exception as e:
+                print(f"  ⚠️  {jid[:30]} -> keeping default (RL program not found)")
+        print()
+    
+    # Run simulation
+    print(f"Running simulation for 3600 steps...")
+    step_count = 0
+    
+    with open(log_file, 'w', newline='') as csvfile:
+        fieldnames = ['step'] + [f'{jid}_{vt}_wait' for jid in controlled_junctions for vt in vehicle_types]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
         
-        # Create a detailed header for per-category wait times
-        header = ['step']
-        for j_id in controlled_junction_ids:
-            for v_type in vehicle_types:
-                header.append(f'{j_id}_{v_type}_wait_time')
-        writer.writerow(header)
-        
-        step = 0
-        while traci.simulation.getMinExpectedNumber() > 0:
-            traci.simulationStep()
-            
-            # RL agent control logic (remains the same)
-            if mode == 'rl':
-                sim.update_phase_timers()
-                for j_id in controlled_junction_ids:
-                    if sim.phase_timers[j_id] >= config['fdrl']['green_time']:
-                        state = sim.get_state(j_id)
+        for step in range(3600):
+            # RL control
+            if mode in ['rl', 'rl_priority']:
+                for jid in controlled_junctions:
+                    if jid in agents and jid in sim.junctions:
+                        state = sim.get_state(jid)
+                        state_tensor = torch.FloatTensor(state)
+                        
                         with torch.no_grad():
-                            action = torch.argmax(agents[j_id](torch.FloatTensor(state))).item()
-                        sim.set_phase_inference(j_id, action, config['fdrl']['yellow_time'])
-
-            # --- DETAILED DATA COLLECTION ---
-            log_row = [step]
-            for j_id in controlled_junction_ids:
-                # Initialize a dictionary to store total wait time per vehicle type for this junction
-                wait_times_by_type = {v_type: 0.0 for v_type in vehicle_types}
-                
-                # Iterate through all incoming roads to the junction
-                for road_id in sim.junctions[j_id]['incoming_roads']:
-                    lane_count = traci.edge.getLaneNumber(road_id)
-                    lanes = [f"{road_id}_{i}" for i in range(lane_count)]
-                    for lane_id in lanes:
-                        vehicles = traci.lane.getLastStepVehicleIDs(lane_id)
-                        for v_id in vehicles:
-                            v_type = traci.vehicle.getTypeID(v_id)
-                            # Add vehicle's wait time to the correct category
-                            if v_type in wait_times_by_type:
-                                wait_times_by_type[v_type] += traci.vehicle.getWaitingTime(v_id)
-                
-                # Append the collected data to the log row in the correct order
-                log_row.extend(list(wait_times_by_type.values()))
+                            action_probs = agents[jid](state_tensor)
+                            action = torch.argmax(action_probs).item()
+                        
+                        # Mask invalid actions
+                        actual_roads = len(sim.junctions[jid]['incoming_roads'])
+                        if action < actual_roads:
+                            sim.set_phase(jid, action, 
+                                        config['fdrl']['yellow_time'],
+                                        config['fdrl']['green_time'])
             
-            writer.writerow(log_row)
-            f.flush()
-            step += 1
-
+            try:
+                traci.simulationStep()
+                step_count += 1
+            except Exception as e:
+                print(f"\n⚠️  Simulation error at step {step}: {e}")
+                break
+            
+            # Log every 10 steps
+            if step % 10 == 0:
+                row = {'step': step}
+                for jid in controlled_junctions:
+                    if jid not in sim.junctions:
+                        continue
+                    for vt in vehicle_types:
+                        wait_time = 0
+                        count = 0
+                        for road in sim.junctions[jid]['incoming_roads']:
+                            try:
+                                for vid in traci.edge.getLastStepVehicleIDs(road):
+                                    try:
+                                        vtype = traci.vehicle.getTypeID(vid)
+                                        # Map passenger -> car
+                                        if vtype == 'passenger':
+                                            vtype = 'car'
+                                        if vtype == vt:
+                                            wait_time += traci.vehicle.getWaitingTime(vid)
+                                            count += 1
+                                    except:
+                                        pass
+                            except:
+                                pass
+                        avg_wait = wait_time / max(count, 1)
+                        row[f'{jid}_{vt}_wait'] = avg_wait
+                
+                writer.writerow(row)
+            
+            if step % 300 == 0:
+                active = traci.vehicle.getIDCount()
+                print(f"  Step {step}/3600... ({active} vehicles active)")
+            
+            # Check if simulation ended early
+            if traci.simulation.getMinExpectedNumber() == 0 and step > 300:
+                print(f"\n⚠️  Simulation ended at step {step} (no more vehicles)")
+                break
+    
     sim.close()
-    print("Inference simulation finished.")
+    print(f"✓ Inference complete: {log_file}")
+    print(f"  Total steps simulated: {step_count}\n")
 
+def plot_comparison(config, modes):
+    print("Generating comparison plots...")
+    
+    vehicle_types = list(config['priority_weights'].keys())
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    for mode in modes:
+        log_file = f'inference_results/inference_log_{mode}.csv'
+        if not os.path.exists(log_file):
+            continue
+        
+        try:
+            df = pd.read_csv(log_file)
+            if df.empty:
+                continue
+            
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            numeric_cols = [c for c in numeric_cols if c != 'step']
+            
+            if len(numeric_cols) > 0:
+                avg_wait = df[numeric_cols].mean(axis=1)
+                # Smooth with rolling average
+                avg_wait_smooth = avg_wait.rolling(window=10, min_periods=1).mean()
+                ax.plot(df['step'], avg_wait_smooth, label=mode.replace('_', ' ').title(), 
+                       linewidth=2, alpha=0.8)
+        except Exception as e:
+            print(f"  ⚠️  Could not plot {mode}: {e}")
+    
+    ax.set_xlabel('Simulation Step', fontsize=12)
+    ax.set_ylabel('Average Waiting Time (s)', fontsize=12)
+    ax.set_title('Traffic Control Performance Comparison', fontsize=14, weight='bold')
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig('inference_results/overall_comparison.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print("✓ Comparison plot saved: inference_results/overall_comparison.png")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Run FDRL inference for traffic control.")
-    parser.add_argument('--mode', type=str, required=True, choices=['rl', 'fixed'], help="Mode: 'rl' or 'fixed'.")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', type=str, required=True, 
+                       choices=['fixed', 'rl', 'rl_priority'])
     args = parser.parse_args()
-
+    
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
-
-    output_dir = "inference_results"
-    os.makedirs(output_dir, exist_ok=True)
-    log_file_path = os.path.join(output_dir, f"inference_log_{args.mode}.csv")
-    if os.path.exists(log_file_path):
-        os.remove(log_file_path)
-
-    # Run simulation process, and when it's done, generate the breakdown plot.
-    sim_process = multiprocessing.Process(target=run_inference, args=(config, args.mode, log_file_path))
     
-    sim_process.start()
-    try:
-        sim_process.join()
-    except KeyboardInterrupt:
-        print("\nInterrupted by user.")
-    finally:
-        if sim_process.is_alive():
-            sim_process.terminate()
-        
-        # Call the new plot saving function at the very end
-        save_wait_time_breakdown_plot(log_file_path, config['system']['controlled_junctions'], args.mode, config, output_dir)
-        print("Inference run complete.")
+    os.makedirs('inference_results', exist_ok=True)
+    log_file = f'inference_results/inference_log_{args.mode}.csv'
+    
+    run_inference(config, args.mode, log_file)
+    
+    # Try to generate comparison
+    modes = ['fixed', 'rl', 'rl_priority']
+    existing_modes = [m for m in modes if os.path.exists(f'inference_results/inference_log_{m}.csv')]
+    
+    if len(existing_modes) >= 2:
+        plot_comparison(config, existing_modes)

@@ -1,59 +1,61 @@
-# ----------------------------------
-# SUMO Simulation Configuration
-# ----------------------------------
 sumo:
-  config_file: sumo_files/Berlin/osm.sumocfg
+  # Path to your SUMO configuration file
+  config_file: sumo_files/mulund/osm.sumocfg
   step_length: 1.0
   gui: false
   gridlock_detection_time: 300.0
 
-# ----------------------------------
-# Vehicle Priority Weights
-# ----------------------------------
+# Priority weights for different vehicle types
+# Higher values = higher priority
+# For comparison study:
+#   - Mode 'rl': All weights are set to 1.0 internally (no priority)
+#   - Mode 'rl_priority': Uses these weights
 priority_weights:
-  truck: 10.0      # Highest priority (acting as ambulance)
-  bus: 5.0         # High priority (public transport)
-  car: 1.0         # Standard priority
-  motorcycle: 1.0  # Standard priority
+  truck: 10.0      # Heavy vehicles, emergency vehicles
+  bus: 5.0         # Public transport
+  car: 1.0         # Private vehicles
+  motorcycle: 1.0  # Two-wheelers
 
-# ----------------------------------
-# Federated Deep RL Configuration
-# ----------------------------------
+# Federated Deep Reinforcement Learning parameters
 fdrl:
-  epochs: 500
-  K: 10
-  alpha: 0.1
+  epochs: 50          # Reduce from 500 to 50 (less epochs but longer)
+  K: 500              # Increase from 50 to 500 (500 steps = 500 seconds per epoch)
+  alpha: 0.05
   gamma: 0.99
   actor_lr: 0.0001
-  critic_lr: 0.001
+  critic_lr: 0.0005
   clip_epsilon: 0.2
   yellow_time: 3
-  green_time: 30
+  green_time: 10
 
-# ----------------------------------
-# Model & System Configuration
-# ----------------------------------
+# Neural network architecture
 model:
-  hidden_layers: [64, 16]
-  activation: relu
+  hidden_layers: [128, 64]  # Hidden layer sizes
+  activation: relu          # Activation function
 
+# System configuration
 system:
   server_host: localhost
   server_port: 12345
 
-  # This list will be auto-populated by discover_junctions.py
-  controlled_junctions:
-  - GS_21441737
-  - GS_25954547
-  - GS_26752062
-  - GS_26753059
-  - GS_659394041
-  - cluster_262476527_26871569_311718989_3836987635_#3more
-  # Save model in a dedicated directory to prevent errors
-  model_save_path: saved_models/model.pth
+  # AUTO-CONFIGURED: Run discover_junctions.py to set these
+  max_roads: 4              # Maximum roads at any junction (for padding)
+  controlled_junctions:     # List of junctions to control with RL
+    # Will be automatically filled by discover_junctions.py
+    # Example:
+    # - junction_001
+    # - junction_002
+  - '1388354194'
+  - cluster_10023271204_10023271205_6274819761_630699810
+  - cluster_10260826682_1596008552
+  - cluster_10275495182_1388354213
+  - cluster_1386641179_5924611759_7285424910_7285424940
+  - cluster_1388354178_5924612075
+  - joinedS_5924612047_cluster_5924612046_619130306
+  model_save_path: saved_models/universal_model.pth
   log_file: training_logs.json
 
   # Early stopping configuration
   enable_patience: true
-  patience_epochs: 50
-  min_reward_delta: 0.1
+  patience_epochs: 20       # Stop if no improvement for N epochs
+  min_reward_delta: 0.05    # Minimum improvement to reset patience

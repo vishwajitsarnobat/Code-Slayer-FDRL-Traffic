@@ -1,5 +1,3 @@
-# sumo_simulator.py (CORRECTED)
-
 import os
 import sys
 import numpy as np
@@ -7,23 +5,28 @@ import traci
 import warnings
 from collections import defaultdict
 
-# In sumo_simulator.py
-
 class SumoSimulator:
-    def __init__(self, config_file, config, step_length=1.0, gui=False, queue_dist=150): # Add config
+    def __init__(self, config_file, config, step_length=1.0, gui=False, queue_dist=150):
         self.config_file = config_file
         self.step_length = step_length
         self.gui = gui
         self.queue_detection_distance = queue_dist
         
-        # Store priority weights from the config
         self.priority_weights = config['priority_weights']
         
         self._start_simulation()
         
         self.junctions = self._get_junctions_and_phase_maps()
         
-        # We will now track WEIGHTED waiting time for the reward
+        # Calculate MAX_ROADS for universal model (padding target)
+        if self.junctions:
+            self.max_roads = max(len(j['incoming_roads']) for j in self.junctions.values())
+            print(f"Universal Model: MAX_ROADS = {self.max_roads}")
+        else:
+            self.max_roads = 4  # Fallback default
+        
+        # Track previous state for reward computation
+        self.last_weighted_queue = {j_id: 0.0 for j_id in self.junctions}
         self.last_weighted_waiting_times = {j_id: 0.0 for j_id in self.junctions}
 
         self.phase_timers = {}
@@ -38,32 +41,43 @@ class SumoSimulator:
 
         sumo_binary = "sumo-gui" if self.gui else "sumo"
         sumo_cmd = [
-            sumo_binary, "-c", self.config_file, "--step-length", str(self.step_length), 
-            "--no-warnings", "true", "--time-to-teleport", "-1"
+            sumo_binary, 
+            "-c", self.config_file, 
+            "--step-length", str(self.step_length),
+            "--no-warnings", "true",
+            # Keep only the essential TraCI-related flags and config file.
+            # Other processing flags (time-to-teleport, tls.actuated.jam-threshold, etc.) 
+            # are typically managed in the .sumocfg file, which is loaded by -c.
+            "--time-to-teleport", "300",  # Keep: Good default for RL stability
         ]
         traci.start(sumo_cmd)
 
     def _get_junctions_and_phase_maps(self):
         """
-        Discovers junctions, their roads, AND dynamically creates a map from our
-        action index (0, 1, 2...) to the correct green phase index in SUMO.
+        Discovers junctions and creates action-to-phase mappings.
+        Each junction stores its actual number of roads for padding logic.
         """
         junctions = {}
         junction_ids = traci.trafficlight.getIDList()
         
         for j_id in junction_ids:
-            incoming_roads = sorted(list(set([traci.lane.getEdgeID(lane) for lane in set(traci.trafficlight.getControlledLanes(j_id))])))
+            incoming_roads = sorted(list(set([
+                traci.lane.getEdgeID(lane) 
+                for lane in set(traci.trafficlight.getControlledLanes(j_id))
+            ])))
             
             action_to_phase_map = {}
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 logic = traci.trafficlight.getCompleteRedYellowGreenDefinition(j_id)
             
-            if not logic: continue # Skip if no logic is defined
+            if not logic:
+                continue
             
             green_phases = {}
             for i, phase in enumerate(logic[0].phases):
                 state = phase.state.lower()
+                # Check for green phases (not yellow and 'g' present)
                 if 'y' not in state and 'g' in state:
                     green_link_indices = [idx for idx, char in enumerate(state) if char == 'g']
                     for link_idx in green_link_indices:
@@ -82,79 +96,130 @@ class SumoSimulator:
             junctions[j_id] = {
                 "id": j_id,
                 "incoming_roads": incoming_roads,
+                "num_roads": len(incoming_roads),  # Store actual number
                 "action_to_phase": action_to_phase_map
             }
         return junctions
 
     def set_phase(self, junction_id, action_index, yellow_time, green_time):
-        """A simplified and more robust phase setting logic."""
-        if action_index not in self.junctions[junction_id]['action_to_phase']:
+        """
+        Set traffic light phase. 
+        IMPORTANT: action_index here is UNPADDED (0 to num_roads-1)
+        """
+        junction_info = self.junctions[junction_id]
+        actual_num_roads = junction_info['num_roads']
+        
+        # Ignore padded actions (beyond actual roads)
+        if action_index >= actual_num_roads:
+            # This is a padded action, do nothing (maintain current phase)
+            for _ in range(green_time):
+                self.simulation_step()
+            return
+        
+        if action_index not in junction_info['action_to_phase']:
             for _ in range(green_time):
                 self.simulation_step()
             return
 
-        target_green_phase_index = self.junctions[junction_id]['action_to_phase'][action_index]
+        target_green_phase_index = junction_info['action_to_phase'][action_index]
         traci.trafficlight.setPhase(junction_id, target_green_phase_index)
         for _ in range(green_time):
             self.simulation_step()
     
     def get_state(self, junction_id):
-        state = []
+        """
+        Returns PADDED state vector for universal model.
+        State format: [queue_0, wait_0, queue_1, wait_1, ..., queue_N, wait_N]
+        Padded to max_roads with zeros.
+        """
         junction_info = self.junctions[junction_id]
+        actual_roads = junction_info['incoming_roads']
+        actual_num_roads = junction_info['num_roads']
         
-        for road_id in junction_info['incoming_roads']:
+        state = []
+        
+        # Get actual road data
+        for road_id in actual_roads:
             lane_count = traci.edge.getLaneNumber(road_id)
             lanes = [f"{road_id}_{i}" for i in range(lane_count)]
             
             weighted_queue_length = 0.0
-            weighted_max_wait_time = 0.0 # We will now use the individual vehicle's wait time
+            weighted_max_wait_time = 0.0
 
             for lane_id in lanes:
                 vehicles = traci.lane.getLastStepVehicleIDs(lane_id)
                 
-                # Calculate weighted queue
+                # Calculate weighted queue (stopped vehicles)
                 for v_id in vehicles:
                     if traci.vehicle.getSpeed(v_id) < 0.1:
                         v_type = traci.vehicle.getTypeID(v_id)
-                        # Use a default weight of 1.0 if type is not in config
                         weight = self.priority_weights.get(v_type, 1.0)
                         weighted_queue_length += weight
                 
-                # Find the highest weighted waiting time on this road
-                # This is more accurate than weighting the lane's total time
+                # Find maximum weighted waiting time
                 for v_id in vehicles:
                     v_type = traci.vehicle.getTypeID(v_id)
                     weight = self.priority_weights.get(v_type, 1.0)
                     vehicle_wait_time = traci.vehicle.getWaitingTime(v_id)
                     
-                    # We want the wait time of the highest priority vehicle
-                    if vehicle_wait_time * weight > weighted_max_wait_time:
-                         weighted_max_wait_time = vehicle_wait_time * weight
+                    weighted_wait = vehicle_wait_time * weight
+                    if weighted_wait > weighted_max_wait_time:
+                        weighted_max_wait_time = weighted_wait
             
-            state.extend([weighted_queue_length, weighted_max_wait_time])
+            # Normalize features
+            normalized_queue = min(weighted_queue_length / 20.0, 1.0)
+            normalized_wait = min(weighted_max_wait_time / 120.0, 1.0)
             
+            state.extend([normalized_queue, normalized_wait])
+        
+        # PAD with zeros to reach universal size
+        padding_needed = self.max_roads - actual_num_roads
+        state.extend([0.0, 0.0] * padding_needed)
+        
         return np.array(state, dtype=np.float32)
 
     def get_reward(self, junction_id):
-        REWARD_SCALING_FACTOR = 100.0 
-
-        total_weighted_waiting_time = 0.0
+        """
+        Reward calculation (unchanged from before).
+        Only considers ACTUAL roads, ignoring padded ones.
+        """
         junction_info = self.junctions[junction_id]
         
+        total_weighted_queue = 0.0
+        total_weighted_waiting_time = 0.0
+        road_queues = []
+        
         for road_id in junction_info['incoming_roads']:
-            lane_count = traci.edge.getLaneNumber(road_id)
-            lanes = [f"{road_id}_{i}" for i in range(lane_count)]
+            road_queue = 0.0
+            road_wait = 0.0
+            
+            lanes = [f"{road_id}_{i}" for i in range(traci.edge.getLaneNumber(road_id))]
             for lane_id in lanes:
-                vehicles = traci.lane.getLastStepVehicleIDs(lane_id)
-                for v_id in vehicles:
+                for v_id in traci.lane.getLastStepVehicleIDs(lane_id):
                     v_type = traci.vehicle.getTypeID(v_id)
                     weight = self.priority_weights.get(v_type, 1.0)
-                    total_weighted_waiting_time += traci.vehicle.getWaitingTime(v_id) * weight
-
-        reward = self.last_weighted_waiting_times[junction_id] - total_weighted_waiting_time
+                    
+                    if traci.vehicle.getSpeed(v_id) < 0.1:
+                        road_queue += weight
+                    
+                    road_wait += traci.vehicle.getWaitingTime(v_id) * weight
+            
+            total_weighted_queue += road_queue
+            total_weighted_waiting_time += road_wait
+            road_queues.append(road_queue)
+        
+        # Calculate pressure
+        pressure = 0.0
+        if len(road_queues) > 1:
+            avg_queue = np.mean(road_queues)
+            pressure = np.std(road_queues) if avg_queue > 0 else 0.0
+        
+        reward = -(total_weighted_queue + 0.5 * pressure) / 10.0
+        
+        self.last_weighted_queue[junction_id] = total_weighted_queue
         self.last_weighted_waiting_times[junction_id] = total_weighted_waiting_time
         
-        return reward / REWARD_SCALING_FACTOR
+        return reward
 
     def simulation_step(self):
         traci.simulationStep()
@@ -168,11 +233,18 @@ class SumoSimulator:
             self.phase_timers[j_id] += 1
 
     def set_phase_inference(self, junction_id, action_index, yellow_time):
-        if action_index not in self.junctions[junction_id]['action_to_phase']:
+        """Inference version with padding awareness."""
+        junction_info = self.junctions[junction_id]
+        actual_num_roads = junction_info['num_roads']
+        
+        # Ignore padded actions
+        if action_index >= actual_num_roads:
             return
-        target_green_phase_index = self.junctions[junction_id]['action_to_phase'][action_index]
-        # In inference, we simplify and directly set the green phase. SUMO's default
-        # junction logic will handle any necessary intermediate steps.
+            
+        if action_index not in junction_info['action_to_phase']:
+            return
+            
+        target_green_phase_index = junction_info['action_to_phase'][action_index]
         traci.trafficlight.setPhase(junction_id, target_green_phase_index)
         self.phase_timers[junction_id] = 0
         self.current_actions[junction_id] = action_index
