@@ -5,10 +5,6 @@ build/
 dist/
 wheels/
 *.egg-info
-uv.lock
 
 # Virtual environments
 .venv
-inference_results
-saved_models
-sumo_files
