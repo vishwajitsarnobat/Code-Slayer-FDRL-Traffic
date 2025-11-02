@@ -1,9 +1,10 @@
-export const dynamic = "force-dynamic"; // App Router
+'use client';
 
-
+import { useState, useEffect } from 'react';
 import { getEvents } from '@/lib/api'
 import type { Event, EventsResponse, EventSeverity, EventStatus } from '@/app/types/events'
 import EventCard from '@/components/EventCard';
+import { Plus } from 'lucide-react';
 
 // Helper function to format dates
 function formatDateTime(dateString: string): string {
@@ -248,11 +249,100 @@ function getEventTypeColor(type: string): string {
 //   )
 // }
 
-export default async function EventsPage() {
-  try {
-    // Fetch events data server-side
-    const eventsData: EventsResponse = await getEvents()
-    const { events, total_count, active_count, timestamp } = eventsData
+export default function EventsPage() {
+  const [events, setEvents] = useState<Event[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [activeCount, setActiveCount] = useState(0);
+  const [timestamp, setTimestamp] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  
+  // Form state
+  const [newEvent, setNewEvent] = useState({
+    eventName: '',
+    startDate: '',
+    endDate: '',
+    routeIds: [] as string[]
+  });
+
+  // Fetch events data
+  useEffect(() => {
+    loadEvents();
+  }, []);
+
+  async function loadEvents() {
+    try {
+      setLoading(true);
+      const eventsData: EventsResponse = await getEvents();
+      setEvents(eventsData.events);
+      setTotalCount(eventsData.total_count);
+      setActiveCount(eventsData.active_count);
+      setTimestamp(eventsData.timestamp);
+      setError(null);
+    } catch (err) {
+      setError('Failed to load events data');
+      console.error('Error loading events:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSubmitEvent() {
+    try {
+      const response = await fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newEvent)
+      });
+      
+      if (response.ok) {
+        setShowAddModal(false);
+        setNewEvent({
+          eventName: '',
+          startDate: '',
+          endDate: '',
+          routeIds: []
+        });
+        loadEvents(); // Reload events
+      }
+    } catch (err) {
+      console.error('Error adding event:', err);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600 dark:text-gray-400">Loading events...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-red-500 text-4xl mb-4">⚠️</div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+            Failed to load events data
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400 mb-4">
+            {error}
+          </p>
+          <button 
+            onClick={() => loadEvents()} 
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -268,15 +358,24 @@ export default async function EventsPage() {
                   Real-time traffic events and incidents management
                 </p>
               </div>
-              <div className="flex space-x-6 text-sm">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-gray-900 dark:text-white">5</div>
-                  <div className="text-gray-500 dark:text-gray-400">Total Events</div>
+              <div className="flex items-center space-x-4">
+                <div className="flex space-x-6 text-sm mr-4">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-gray-900 dark:text-white">{totalCount}</div>
+                    <div className="text-gray-500 dark:text-gray-400">Total Events</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-green-600 dark:text-green-400">{activeCount}</div>
+                    <div className="text-gray-500 dark:text-gray-400">Active Events</div>
+                  </div>
                 </div>
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-green-600 dark:text-green-400">2</div>
-                  <div className="text-gray-500 dark:text-gray-400">Active Events</div>
-                </div>
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors shadow-sm"
+                >
+                  <Plus className="w-5 h-5" />
+                  <span>Add Event</span>
+                </button>
               </div>
             </div>
           </div>
@@ -312,29 +411,101 @@ export default async function EventsPage() {
             </>
           )}
         </div>
+
+        {/* Add Event Modal */}
+        {showAddModal && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between p-6 border-b border-gray-200 dark:border-gray-700">
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Add New Event</h2>
+                <button
+                  onClick={() => setShowAddModal(false)}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-2xl font-bold"
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-6 space-y-6">
+                {/* Event Name */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Event Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={newEvent.eventName}
+                    onChange={(e) => setNewEvent({ ...newEvent, eventName: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Enter event name"
+                  />
+                </div>
+
+                {/* Start Date */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Start Date & Time *
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={newEvent.startDate}
+                    onChange={(e) => setNewEvent({ ...newEvent, startDate: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+
+                {/* End Date */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    End Date & Time *
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={newEvent.endDate}
+                    onChange={(e) => setNewEvent({ ...newEvent, endDate: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+
+                {/* Block Streets in Simulation */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Block Streets
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => window.location.href = '/dashboard/simulation'}
+                    className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all duration-300 shadow-md hover:shadow-lg font-medium flex items-center justify-center space-x-2"
+                  >
+                    <span>Go to Simulation to Block Streets</span>
+                  </button>
+                  <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                    Click streets on the simulation map to block them for this event
+                  </p>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="flex items-center justify-end space-x-3 p-6 border-t border-gray-200 dark:border-gray-700">
+                <button
+                  onClick={() => setShowAddModal(false)}
+                  className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSubmitEvent}
+                  disabled={!newEvent.eventName || !newEvent.startDate || !newEvent.endDate}
+                  className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  Add Event
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
-  } catch (error) {
-    console.error('Error loading events data:', error)
-    
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="text-center">
-          <div className="text-red-500 text-4xl mb-4">⚠️</div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-            Failed to load events data
-          </h1>
-          <p className="text-gray-600 dark:text-gray-400 mb-4">
-            Please check your events.json file and try again.
-          </p>
-          <button 
-            onClick={() => window.location.reload()} 
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-          >
-            Retry
-          </button>
-        </div>
-      </div>
-    )
-  }
 }

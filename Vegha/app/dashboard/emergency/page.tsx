@@ -31,27 +31,22 @@ interface TrafficData {
   traffic_data: TrafficVehicleData[];
 }
 
-// Mock data
+// Fetch real data from RL results
 async function getTrafficData(): Promise<TrafficData> {
-  return {
-    traffic_data: [
-      {
-        vehicle_type: "private",
-        no_of_vehicles: 120,
-        avg_waiting_time: 45.6
-      },
-      {
-        vehicle_type: "public",
-        no_of_vehicles: 35,
-        avg_waiting_time: 30.2
-      },
-      {
-        vehicle_type: "emergency",
-        no_of_vehicles: 5,
-        avg_waiting_time: 10.8
-      }
-    ]
-  };
+  try {
+    const response = await fetch('/api/traffic-data');
+    if (!response.ok) {
+      throw new Error('Failed to fetch traffic data');
+    }
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error fetching traffic data:', error);
+    // Fallback to empty data if fetch fails
+    return {
+      traffic_data: []
+    };
+  }
 }
 
 // Animation Variants
@@ -267,7 +262,7 @@ function AnimatedDonutChart({
         {title}
       </motion.h3>
 
-      <div className="flex flex-col lg:flex-row items-center justify-center gap-12">
+      <div className="flex flex-col lg:flex-row items-center justify-center gap-12 text-white">
         {/* Donut Chart */}
         <motion.svg
           width="280"
@@ -285,7 +280,7 @@ function AnimatedDonutChart({
             fill="none"
             stroke="currentColor"
             strokeWidth="2"
-            className="text-gray-200 dark:text-gray-700"
+            className="text-gray-200 dark:text-"
           />
 
           {/* Segments */}
@@ -340,7 +335,8 @@ function AnimatedDonutChart({
             y="0"
             textAnchor="middle"
             dominantBaseline="middle"
-            className="text-gray-900 dark:text-white font-bold text-2xl"
+            fill="white"
+            className="font-bold text-2xl"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: delay + 0.5 }}
@@ -351,7 +347,8 @@ function AnimatedDonutChart({
             x="0"
             y="20"
             textAnchor="middle"
-            className="text-gray-600 dark:text-gray-400 text-xs"
+            fill="white"
+            className="text-xs"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: delay + 0.6 }}

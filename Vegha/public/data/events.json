@@ -14,12 +14,18 @@
       "end_time": "2025-09-17T22:00:00+05:30",
       "status": "active",
       "impact": {
-        "affected_routes": ["R001", "R004"],
+        "affected_routes": [
+          "R001",
+          "R004"
+        ],
         "estimated_delay_min": 25,
         "lanes_blocked": 2,
         "diverted_traffic": true
       },
-      "authorities": ["BMRCL", "Bangalore Traffic Police"],
+      "authorities": [
+        "BMRCL",
+        "Bangalore Traffic Police"
+      ],
       "created_by": "traffic_control_bangalore",
       "created_at": "2025-09-15T14:30:00+05:30",
       "last_modified": "2025-09-17T15:45:00+05:30"
@@ -38,12 +44,22 @@
       "end_time": "2025-09-17T23:00:00+05:30",
       "status": "scheduled",
       "impact": {
-        "affected_routes": ["R003", "R005", "R007"],
+        "affected_routes": [
+          "R003",
+          "R005",
+          "R007"
+        ],
         "estimated_delay_min": 90,
         "complete_closure": true,
-        "alternate_routes_suggested": ["R008", "R009"]
+        "alternate_routes_suggested": [
+          "R008",
+          "R009"
+        ]
       },
-      "authorities": ["Karnataka Police", "BBMP"],
+      "authorities": [
+        "Karnataka Police",
+        "BBMP"
+      ],
       "crowd_estimate": 50000,
       "created_by": "event_coordinator_blr",
       "created_at": "2025-09-10T11:00:00+05:30",
@@ -64,12 +80,19 @@
       "estimated_duration_min": 120,
       "status": "active",
       "impact": {
-        "affected_routes": ["R001", "R006"],
+        "affected_routes": [
+          "R001",
+          "R006"
+        ],
         "estimated_delay_min": 45,
         "lanes_blocked": 3,
         "emergency_services_required": true
       },
-      "authorities_notified": ["Bangalore Traffic Police", "BMTC", "108 Ambulance"],
+      "authorities_notified": [
+        "Bangalore Traffic Police",
+        "BMTC",
+        "108 Ambulance"
+      ],
       "incident_number": "BTP/2025/ACC/0001234",
       "created_by": "system",
       "created_at": "2025-09-17T16:00:18+05:30",
@@ -89,17 +112,22 @@
       "end_time": "2025-09-18T16:00:00+05:30",
       "status": "scheduled",
       "impact": {
-        "affected_routes": ["R010", "R011"],
+        "affected_routes": [
+          "R010",
+          "R011"
+        ],
         "estimated_delay_min": 15,
         "lanes_blocked": 1,
         "diverted_traffic": true
       },
-      "authorities": ["BBMP", "Bangalore Traffic Police"],
+      "authorities": [
+        "BBMP",
+        "Bangalore Traffic Police"
+      ],
       "created_by": "maintenance_coordinator",
       "created_at": "2025-09-16T09:15:00+05:30",
       "last_modified": "2025-09-16T09:15:00+05:30"
     },
-   
     {
       "id": "E006",
       "title": "Student Protest - Vidhana Soudha",
@@ -114,16 +142,82 @@
       "end_time": "2025-09-17T15:00:00+05:30",
       "status": "completed",
       "impact": {
-        "affected_routes": ["R002", "R006"],
+        "affected_routes": [
+          "R002",
+          "R006"
+        ],
         "estimated_delay_min": 30,
         "complete_closure": true,
-        "alternate_routes_suggested": ["R007", "R008"]
+        "alternate_routes_suggested": [
+          "R007",
+          "R008"
+        ]
       },
-      "authorities": ["Karnataka Police", "Bangalore Traffic Police"],
+      "authorities": [
+        "Karnataka Police",
+        "Bangalore Traffic Police"
+      ],
       "crowd_estimate": 2000,
       "created_by": "police_control_room",
       "created_at": "2025-09-17T10:30:00+05:30",
       "last_modified": "2025-09-17T15:30:00+05:30"
+    },
+    {
+      "id": "E006",
+      "title": "Hasbj",
+      "description": "Event created on 11/2/2025",
+      "type": "custom",
+      "severity": "medium",
+      "location": {
+        "route_id": "Karl_Marx_Allee",
+        "description": "Affected routes: Karl_Marx_Allee, Potsdamer_Platz"
+      },
+      "start_time": "2025-11-05T05:30:00.000Z",
+      "end_time": "2025-11-06T05:30:00.000Z",
+      "status": "scheduled",
+      "impact": {
+        "affected_routes": [
+          "Karl_Marx_Allee",
+          "Potsdamer_Platz"
+        ],
+        "estimated_delay_min": 0,
+        "lanes_blocked": 0,
+        "diverted_traffic": false
+      },
+      "authorities": [
+        "Traffic Management System"
+      ],
+      "created_by": "system_user",
+      "created_at": "2025-11-02T06:38:48.040Z",
+      "last_modified": "2025-11-02T06:38:48.040Z"
+    },
+    {
+      "id": "E007",
+      "title": "test",
+      "description": "Event created on 11/2/2025",
+      "type": "custom",
+      "severity": "medium",
+      "location": {
+        "route_id": "Torstrasse",
+        "description": "Affected routes: Torstrasse"
+      },
+      "start_time": "2025-11-15T05:30:00.000Z",
+      "end_time": "2025-11-21T05:30:00.000Z",
+      "status": "scheduled",
+      "impact": {
+        "affected_routes": [
+          "Torstrasse"
+        ],
+        "estimated_delay_min": 0,
+        "lanes_blocked": 0,
+        "diverted_traffic": false
+      },
+      "authorities": [
+        "Traffic Management System"
+      ],
+      "created_by": "system_user",
+      "created_at": "2025-11-02T06:43:26.128Z",
+      "last_modified": "2025-11-02T06:43:26.128Z"
     }
   ],
   "total_count": 6,
