@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 
 // --- DEFINE THE URL ONCE HERE ---
-const sumoServerUrl = process.env.NEXT_PUBLIC_SOCKET_IO_URL || 'http://localhost:5000';
+const sumoServerUrl = process.env.NEXT_PUBLIC_SOCKET_IO_URL || 'https://own.vikasrajyadav.com/';
 
 interface SimulationMetrics {
   vehicleCount: number;

@@ -64,7 +64,7 @@ export async function fetchData(file: string) {
   // For server-side requests, use absolute URL
   const baseURL = process.env.NODE_ENV === 'production' 
     ? 'https://vegha.vercel.app' // Replace with your actual domain
-    : 'http://localhost:3000';
+    : 'http://localhost:4000';
     
   const res = await fetch(`${baseURL}/data/${file}`, {
     headers: { "Cache-Control": "no-cache" }
