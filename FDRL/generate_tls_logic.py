@@ -26,9 +26,7 @@ def generate_rl_tls_programs(config_path='config.yaml'):
     
     print("\nStarting temporary SUMO simulation...")
     temp_sim = SumoSimulator(config['sumo']['config_file'], config, gui=False)
-    
     controlled_junction_ids = config['system']['controlled_junctions']
-    
     print(f"Controlled junctions: {len(controlled_junction_ids)}")
     
     # Generate XML
@@ -86,7 +84,7 @@ def generate_rl_tls_programs(config_path='config.yaml'):
     
     # Save XML
     xml_string = tostring(xml_root, 'utf-8')
-    pretty_xml = parseString(xml_string).toprettyxml(indent="    ")
+    pretty_xml = parseString(xml_string).toprettyxml(indent="  ")
     pretty_xml = '\n'.join([line for line in pretty_xml.split('\n') if line.strip()])
     
     sumo_dir = os.path.dirname(config['sumo']['config_file'])

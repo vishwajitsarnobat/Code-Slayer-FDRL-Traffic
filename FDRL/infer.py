@@ -1,59 +1,60 @@
 """
-Inference Script for 3-Way Comparison
+Inference Script for FDRL Traffic Control Performance Evaluation
+Outputs JSON with vehicle-type statistics
 """
+
 import yaml
 import torch
 import numpy as np
 import traci
 import argparse
-import pandas as pd
-import matplotlib.pyplot as plt
+import json
 import os
-import csv
-import time
+from collections import defaultdict
 from sumo_simulator import SumoSimulator
 from ppo_agent import Actor
 
-def run_inference(config, mode, log_file):
+def run_inference(config, mode, output_file, gui=False):
+    """
+    Main function to run the inference simulation.
+    Runs until all vehicles are cleared from the network.
+    """
     print(f"\n{'='*70}")
     print(f"MODE: {mode.upper()}")
     print(f"{'='*70}\n")
     
-    # Start simulation with GUI to see what's happening
-    sim = SumoSimulator(config['sumo']['config_file'], config, gui=False)
+    # Type mapping (SUMO types -> our categories)
+    type_mapping = {
+        'bus_bus': 'bus',
+        'motorcycle_motorcycle': 'motorcycle',
+        'truck_truck': 'truck',
+        'veh_passenger': 'car',
+        'passenger': 'car',
+        'DEFAULT_VEHTYPE': 'car',
+    }
+    
+    # Category grouping (your custom format)
+    # private = motorcycle + car
+    # emergency = truck
+    # public = bus
+    category_mapping = {
+        'motorcycle': 'private',
+        'car': 'private',
+        'truck': 'emergency',
+        'bus': 'public'
+    }
+    
+    # Start simulation
+    print("Starting simulation...\n")
+    sim = SumoSimulator(config['sumo']['config_file'], config, gui=gui)
     controlled_junctions = config['system']['controlled_junctions']
-    vehicle_types = list(config['priority_weights'].keys())
     
-    # Check vehicles - give time for loading
-    print("Checking traffic (waiting for vehicles to load)...")
-    for step in range(100):  # Wait up to 100 steps
-        traci.simulationStep()
-        loaded = traci.simulation.getLoadedNumber()
-        departed = traci.simulation.getDepartedNumber()
-        if loaded > 0 or departed > 0:
-            break
-    
-    print(f"  Loaded: {loaded} vehicles")
-    print(f"  Departed: {departed} vehicles")
-    print(f"  Waiting: {traci.simulation.getStartingTeleportNumber()} to depart")
-    
-    if loaded == 0 and departed == 0:
-        print("\n⚠️  ERROR: No vehicles in simulation!")
-        print("   Check that route files contain vehicles with valid depart times")
-        print("   Route files:")
-        for vtype in vehicle_types:
-            route_file = f"{config['sumo']['config_file'].replace('osm.sumocfg', '')}osm.{vtype if vtype != 'car' else 'passenger'}.trips.xml"
-            if os.path.exists(route_file):
-                count = os.popen(f"grep -c '<trip ' {route_file}").read().strip()
-                print(f"     - {route_file}: {count} trips")
-        sim.close()
-        return
-    
-    # Load model if RL mode
+    # Load RL model if needed
     agents = {}
-    if mode in ['rl', 'rl_priority']:
-        if not os.path.exists('saved_models/universal_model.pth'):
-            print("✗ Model not found. Run training first.")
+    if mode == 'rl':
+        model_path = 'saved_models/universal_model.pth'
+        if not os.path.exists(model_path):
+            print(f"✗ Model not found at '{model_path}'. Run training first.")
             sim.close()
             return
         
@@ -61,161 +62,171 @@ def run_inference(config, mode, log_file):
         state_dim = 2 * max_roads
         action_dim = max_roads
         
-        # Get hidden layers from config
-        hidden_layers = config['model']['hidden_layers']
-        activation = config['model']['activation']
-        
-        print(f"\nLoading model for {len(controlled_junctions)} junctions...")
+        print(f"Loading FDRL model for {len(controlled_junctions)} junctions...")
         for jid in controlled_junctions:
-            # Create actor with correct config
             agents[jid] = Actor(state_dim, action_dim, config)
-            agents[jid].load_state_dict(torch.load('saved_models/universal_model.pth', 
-                                                   map_location='cpu'))
+            agents[jid].load_state_dict(torch.load(model_path, map_location='cpu'))
             agents[jid].eval()
             
-            # Switch to RL program
             try:
                 traci.trafficlight.setProgram(jid, 'rl_program')
-                print(f"  ✓ {jid[:30]} -> RL control")
-            except Exception as e:
-                print(f"  ⚠️  {jid[:30]} -> keeping default (RL program not found)")
+            except traci.TraCIException:
+                print(f"  ⚠️  Could not set RL program for {jid[:30]}")
         print()
     
-    # Run simulation
-    print(f"Running simulation for 3600 steps...")
-    step_count = 0
+    print(f"Running simulation until all vehicles are cleared...\n")
     
-    with open(log_file, 'w', newline='') as csvfile:
-        fieldnames = ['step'] + [f'{jid}_{vt}_wait' for jid in controlled_junctions for vt in vehicle_types]
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
+    # Data collection structures
+    all_vehicle_data = defaultdict(lambda: {'wait_times': [], 'count': 0})
+    
+    # Main simulation loop - runs until all vehicles cleared
+    step = 0
+    max_steps = 100000  # Safety limit
+    log_interval = 100
+    
+    while traci.simulation.getMinExpectedNumber() > 0:
+        if step >= max_steps:
+            print(f"\n⚠️  Reached maximum step limit ({max_steps})")
+            print(f"   Vehicles remaining: {traci.simulation.getMinExpectedNumber()}")
+            break
         
-        for step in range(3600):
-            # RL control
-            if mode in ['rl', 'rl_priority']:
-                for jid in controlled_junctions:
-                    if jid in agents and jid in sim.junctions:
-                        state = sim.get_state(jid)
-                        state_tensor = torch.FloatTensor(state)
-                        
-                        with torch.no_grad():
-                            action_probs = agents[jid](state_tensor)
-                            action = torch.argmax(action_probs).item()
-                        
-                        # Mask invalid actions
-                        actual_roads = len(sim.junctions[jid]['incoming_roads'])
-                        if action < actual_roads:
-                            sim.set_phase(jid, action, 
-                                        config['fdrl']['yellow_time'],
-                                        config['fdrl']['green_time'])
-            
+        # RL control logic
+        if mode == 'rl':
+            for jid in controlled_junctions:
+                if jid in agents and jid in sim.junctions:
+                    state = sim.get_state(jid)
+                    state_tensor = torch.FloatTensor(state)
+                    with torch.no_grad():
+                        action_probs = agents[jid](state_tensor)
+                        action = torch.argmax(action_probs).item()
+                    actual_roads = len(sim.junctions[jid]['incoming_roads'])
+                    if action < actual_roads:
+                        sim.set_phase(jid, action,
+                                    config['fdrl']['yellow_time'],
+                                    config['fdrl']['green_time'])
+        else:
+            # FIXED mode: manually advance simulation
             try:
                 traci.simulationStep()
-                step_count += 1
-            except Exception as e:
+            except traci.TraCIException as e:
                 print(f"\n⚠️  Simulation error at step {step}: {e}")
                 break
+        
+        # Collect vehicle data periodically
+        if step % log_interval == 0:
+            current_time = traci.simulation.getTime()
+            vehicles_expected = traci.simulation.getMinExpectedNumber()
+            all_vehicles = traci.vehicle.getIDList()
             
-            # Log every 10 steps
-            if step % 10 == 0:
-                row = {'step': step}
-                for jid in controlled_junctions:
-                    if jid not in sim.junctions:
-                        continue
-                    for vt in vehicle_types:
-                        wait_time = 0
-                        count = 0
-                        for road in sim.junctions[jid]['incoming_roads']:
-                            try:
-                                for vid in traci.edge.getLastStepVehicleIDs(road):
-                                    try:
-                                        vtype = traci.vehicle.getTypeID(vid)
-                                        # Map passenger -> car
-                                        if vtype == 'passenger':
-                                            vtype = 'car'
-                                        if vtype == vt:
-                                            wait_time += traci.vehicle.getWaitingTime(vid)
-                                            count += 1
-                                    except:
-                                        pass
-                            except:
-                                pass
-                        avg_wait = wait_time / max(count, 1)
-                        row[f'{jid}_{vt}_wait'] = avg_wait
-                
-                writer.writerow(row)
+            print(f"Step {step:6d} | Time: {current_time:8.1f}s | "
+                  f"Active: {len(all_vehicles):4d} | Remaining: {vehicles_expected:4d}")
             
-            if step % 300 == 0:
-                active = traci.vehicle.getIDCount()
-                print(f"  Step {step}/3600... ({active} vehicles active)")
+            # Collect waiting time data
+            for vid in all_vehicles:
+                try:
+                    vtype_sumo = traci.vehicle.getTypeID(vid)
+                    vtype_base = type_mapping.get(vtype_sumo, vtype_sumo)
+                    
+                    # Map to your categories
+                    vtype_category = category_mapping.get(vtype_base, vtype_base)
+                    
+                    accumulated_wait = traci.vehicle.getAccumulatedWaitingTime(vid)
+                    all_vehicle_data[vtype_category]['wait_times'].append(accumulated_wait)
+                    all_vehicle_data[vtype_category]['count'] += 1
+                    
+                except traci.TraCIException:
+                    continue
+        
+        step += 1
+    
+    # Calculate final statistics
+    traffic_data = []
+    total_vehicles = 0
+    total_wait_time_sum = 0
+    
+    # Process each category
+    for category in ['private', 'public', 'emergency']:
+        if category in all_vehicle_data and all_vehicle_data[category]['wait_times']:
+            wait_times = all_vehicle_data[category]['wait_times']
+            num_vehicles = len(wait_times)
+            avg_wait = np.mean(wait_times)
             
-            # Check if simulation ended early
-            if traci.simulation.getMinExpectedNumber() == 0 and step > 300:
-                print(f"\n⚠️  Simulation ended at step {step} (no more vehicles)")
-                break
+            traffic_data.append({
+                "vehicle_type": category,
+                "no_of_vehicles": num_vehicles,
+                "avg_waiting_time": round(float(avg_wait), 2)
+            })
+            
+            total_vehicles += num_vehicles
+            total_wait_time_sum += sum(wait_times)
+        else:
+            # No vehicles of this type
+            traffic_data.append({
+                "vehicle_type": category,
+                "no_of_vehicles": 0,
+                "avg_waiting_time": 0.0
+            })
+    
+    # Add 'any' category (overall)
+    if total_vehicles > 0:
+        overall_avg_wait = total_wait_time_sum / total_vehicles
+    else:
+        overall_avg_wait = 0.0
+    
+    traffic_data.append({
+        "vehicle_type": "any",
+        "no_of_vehicles": total_vehicles,
+        "avg_waiting_time": round(float(overall_avg_wait), 2)
+    })
+    
+    # Create output JSON
+    output_data = {
+        "model_type": mode,
+        "traffic_data": traffic_data
+    }
+    
+    # Save to file
+    with open(output_file, 'w') as f:
+        json.dump(output_data, f, indent=2)
+    
+    # Print completion message
+    print(f"\n{'='*70}")
+    print(f"✓ Simulation completed successfully!")
+    print(f"{'='*70}")
+    print(f"  Mode: {mode.upper()}")
+    print(f"  Total steps executed: {step}")
+    print(f"  Simulation time: {traci.simulation.getTime():.1f} seconds")
+    print(f"  All vehicles cleared from network")
+    print(f"{'='*70}\n")
     
     sim.close()
-    print(f"✓ Inference complete: {log_file}")
-    print(f"  Total steps simulated: {step_count}\n")
+    
+    # Print results
+    print("--- Final Statistics ---")
+    print(json.dumps(output_data, indent=2))
+    print(f"\n✓ Results saved to: {output_file}")
+    print("------------------------\n")
 
-def plot_comparison(config, modes):
-    print("Generating comparison plots...")
-    
-    vehicle_types = list(config['priority_weights'].keys())
-    
-    fig, ax = plt.subplots(figsize=(12, 6))
-    
-    for mode in modes:
-        log_file = f'inference_results/inference_log_{mode}.csv'
-        if not os.path.exists(log_file):
-            continue
-        
-        try:
-            df = pd.read_csv(log_file)
-            if df.empty:
-                continue
-            
-            numeric_cols = df.select_dtypes(include=[np.number]).columns
-            numeric_cols = [c for c in numeric_cols if c != 'step']
-            
-            if len(numeric_cols) > 0:
-                avg_wait = df[numeric_cols].mean(axis=1)
-                # Smooth with rolling average
-                avg_wait_smooth = avg_wait.rolling(window=10, min_periods=1).mean()
-                ax.plot(df['step'], avg_wait_smooth, label=mode.replace('_', ' ').title(), 
-                       linewidth=2, alpha=0.8)
-        except Exception as e:
-            print(f"  ⚠️  Could not plot {mode}: {e}")
-    
-    ax.set_xlabel('Simulation Step', fontsize=12)
-    ax.set_ylabel('Average Waiting Time (s)', fontsize=12)
-    ax.set_title('Traffic Control Performance Comparison', fontsize=14, weight='bold')
-    ax.legend(fontsize=11)
-    ax.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.savefig('inference_results/overall_comparison.png', dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print("✓ Comparison plot saved: inference_results/overall_comparison.png")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', type=str, required=True, 
-                       choices=['fixed', 'rl', 'rl_priority'])
+    parser = argparse.ArgumentParser(description="Run SUMO inference for traffic control.")
+    parser.add_argument('--mode', type=str, required=True,
+                       choices=['fixed', 'rl'],
+                       help='Traffic control mode: fixed (baseline) or rl (FDRL model).')
+    parser.add_argument('--gui', action='store_true',
+                       help='Show SUMO GUI during simulation (default: headless).')
+    parser.add_argument('--output', type=str, default=None,
+                       help='Output JSON file path (default: inference_results/<mode>_results.json).')
     args = parser.parse_args()
     
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
     
+    # Set default output path
     os.makedirs('inference_results', exist_ok=True)
-    log_file = f'inference_results/inference_log_{args.mode}.csv'
+    if args.output is None:
+        output_file = f'inference_results/{args.mode}_results.json'
+    else:
+        output_file = args.output
     
-    run_inference(config, args.mode, log_file)
-    
-    # Try to generate comparison
-    modes = ['fixed', 'rl', 'rl_priority']
-    existing_modes = [m for m in modes if os.path.exists(f'inference_results/inference_log_{m}.csv')]
-    
-    if len(existing_modes) >= 2:
-        plot_comparison(config, existing_modes)
+    run_inference(config, args.mode, output_file, gui=args.gui)

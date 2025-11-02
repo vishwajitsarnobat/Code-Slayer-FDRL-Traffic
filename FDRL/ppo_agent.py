@@ -1,3 +1,8 @@
+"""
+PPO Agent with Actor-Critic Architecture
+Supports both standalone and Lightning Fabric training
+"""
+
 import torch
 import torch.nn as nn
 from torch.distributions import Categorical
@@ -80,12 +85,11 @@ class PPOAgent:
         self.actor = Actor(state_dim, action_dim, config)
         self.critic = Critic(state_dim, config)
         self.actor_old = Actor(state_dim, action_dim, config)
-        
         self.actor_old.load_state_dict(self.actor.state_dict())
         
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), 
+        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(),
                                                lr=config['fdrl']['actor_lr'])
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), 
+        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(),
                                                 lr=config['fdrl']['critic_lr'])
         
         self.MseLoss = nn.MSELoss()
@@ -144,7 +148,6 @@ class PPOAgent:
             
             actor_loss = -torch.min(surr1, surr2).mean()
             critic_loss = self.MseLoss(state_values, rewards)
-            
             loss = actor_loss + 0.5 * critic_loss
             
             # Backprop

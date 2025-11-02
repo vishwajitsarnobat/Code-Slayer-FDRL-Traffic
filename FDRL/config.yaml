@@ -1,25 +1,16 @@
 sumo:
-  # Path to your SUMO configuration file
   config_file: sumo_files/mulund/osm.sumocfg
   step_length: 1.0
   gui: false
   gridlock_detection_time: 300.0
-
-# Priority weights for different vehicle types
-# Higher values = higher priority
-# For comparison study:
-#   - Mode 'rl': All weights are set to 1.0 internally (no priority)
-#   - Mode 'rl_priority': Uses these weights
 priority_weights:
-  truck: 10.0      # Heavy vehicles, emergency vehicles
-  bus: 5.0         # Public transport
-  car: 1.0         # Private vehicles
-  motorcycle: 1.0  # Two-wheelers
-
-# Federated Deep Reinforcement Learning parameters
+  truck: 10.0
+  bus: 5.0
+  car: 1.0
+  motorcycle: 1.0
 fdrl:
-  epochs: 50          # Reduce from 500 to 50 (less epochs but longer)
-  K: 500              # Increase from 50 to 500 (500 steps = 500 seconds per epoch)
+  epochs: 50
+  K: 500
   alpha: 0.05
   gamma: 0.99
   actor_lr: 0.0001
@@ -27,24 +18,16 @@ fdrl:
   clip_epsilon: 0.2
   yellow_time: 3
   green_time: 10
-
-# Neural network architecture
 model:
-  hidden_layers: [128, 64]  # Hidden layer sizes
-  activation: relu          # Activation function
-
-# System configuration
+  hidden_layers:
+  - 128
+  - 64
+  activation: relu
 system:
   server_host: localhost
   server_port: 12345
-
-  # AUTO-CONFIGURED: Run discover_junctions.py to set these
-  max_roads: 4              # Maximum roads at any junction (for padding)
-  controlled_junctions:     # List of junctions to control with RL
-    # Will be automatically filled by discover_junctions.py
-    # Example:
-    # - junction_001
-    # - junction_002
+  max_roads: 4
+  controlled_junctions:
   - '1388354194'
   - cluster_10023271204_10023271205_6274819761_630699810
   - cluster_10260826682_1596008552
@@ -54,8 +37,6 @@ system:
   - joinedS_5924612047_cluster_5924612046_619130306
   model_save_path: saved_models/universal_model.pth
   log_file: training_logs.json
-
-  # Early stopping configuration
   enable_patience: true
-  patience_epochs: 20       # Stop if no improvement for N epochs
-  min_reward_delta: 0.05    # Minimum improvement to reset patience
+  patience_epochs: 20
+  min_reward_delta: 0.05
