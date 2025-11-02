@@ -103,35 +103,40 @@
         }
 
         // ✅ Load Real Vehicle Images instead of boxes
+        // ✅ Load Real Vehicle Images instead of boxes
         function getVehicleSVG(type, angle) {
             var imgSrc = '';
             var size = getVehicleSize(type);
 
             // Select image based on vehicle type
-        if (type === 'bus') {
-            imgSrc = 'images/bus.png';
-        } else if (type === 'truck') {
-            imgSrc = 'images/truck.png';  // ✅ FIXED
-        } else if (type === 'motorcycle') {
-            imgSrc = 'images/bike.png';
-        } else if (type === 'ambulance') {
-            imgSrc = 'images/ambulance.png';  // ✅ FIXED
-        } else {
-            imgSrc = 'images/car.png';
-        }
+            if (type === 'bus') {
+                imgSrc = 'images/bus.png';
+            } else if (type === 'truck') {
+                imgSrc = 'images/truck.png';
+            } else if (type === 'motorcycle') {
+                imgSrc = 'images/bike.png';
+            } else if (type === 'ambulance') {
+                imgSrc = 'images/ambulance.png';
+            } else {
+                // Default to passenger car
+                imgSrc = 'images/car.png';
+            }
 
-            // Adjust angle for proper orientation (SUMO angle - 90°)
-            var cssAngle = angle - 90;
+            // ✅ CHANGE THIS LINE ONLY:
+            // OLD: var cssAngle = angle - 90;
+            // NEW:
+            var cssAngle = angle;  // ← REMOVE the "- 90" offset
 
             return `
                 <svg width="${size.width}" height="${size.height}"
-                     viewBox="0 0 ${size.width} ${size.height}"
-                     style="transform: rotate(${cssAngle}deg); transform-origin: center center; overflow: visible; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
+                    viewBox="0 0 ${size.width} ${size.height}"
+                    style="transform: rotate(${cssAngle}deg); transform-origin: center center; overflow: visible; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));">
                     <image href="${imgSrc}" x="0" y="0" width="${size.width}" height="${size.height}"
-                           onerror="console.error('Failed to load: ${imgSrc}')" />
+                        onerror="console.error('Failed to load: ${imgSrc}')" />
                 </svg>
             `;
         }
+
 
         console.log('🚗 Vehicle images initialized');
 
@@ -179,21 +184,21 @@
                 });
 
                 // Add click handler to block/unblock street
+                // ✅ NEW: Click street on map to select in dropdown
                 polyline.on('click', function(e) {
                     L.DomEvent.stopPropagation(e);
-
-                    if (closedStreets.includes(streetId)) {
-                        // Unblock street
-                        if (confirm('Reopen street: ' + streetId + '?')) {
-                            socket.emit('open_street', {street: streetId});
-                        }
-                    } else {
-                        // Block street
-                        if (confirm('Block street: ' + streetId + '?')) {
-                            socket.emit('close_street', {street: streetId});
-                        }
+                    
+                    // Set dropdown to this street
+                    document.getElementById('streetSelect').value = streetId;
+                    
+                    console.log('📍 Selected street in dropdown:', streetId);
+                    
+                    // Auto-trigger close confirmation
+                    if (confirm('Block street: ' + streetId + '?')) {
+                        socket.emit('close_street', {street: streetId});
                     }
                 });
+
 
                 // Add popup with street info
                 polyline.bindPopup(
